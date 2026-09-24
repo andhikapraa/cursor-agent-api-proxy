@@ -1,0 +1,72 @@
+name: Build and publish Cursor proxy image
+
+on:
+  push:
+    branches: [main, ci-cursor-proxy-image]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  attestations: write
+  id-token: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Log in to GHCR
+        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and publish image
+        id: push
+        uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Pull published image for smoke test
+        run: docker pull ghcr.io/${{ github.repository }}:sha-${GITHUB_SHA::7}
+
+      - name: Smoke-test health endpoint
+        run: |
+          set -euo pipefail
+          docker run --detach --name cursor-proxy-smoke --publish 4646:4646 \
+            ghcr.io/${{ github.repository }}:sha-${GITHUB_SHA::7}
+          trap 'docker logs cursor-proxy-smoke || true; docker rm --force cursor-proxy-smoke || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:4646/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+
+      - name: Generate image attestation
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
