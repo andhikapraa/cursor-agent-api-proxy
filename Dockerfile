@@ -11,6 +11,7 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
+COPY scripts ./scripts
 RUN npm install --global pnpm \
     && pnpm install --frozen-lockfile
 
