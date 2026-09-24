@@ -6,8 +6,8 @@ ENV NODE_ENV=production \
     PATH=/root/.local/bin:$PATH
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl https://cursor.com/install -fsS | bash
+    && curl https://cursor.com/install -fsS | bash \
+    && cp /root/.local/bin/agent /usr/local/bin/agent
 
 WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
