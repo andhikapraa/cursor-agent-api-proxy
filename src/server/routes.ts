@@ -16,43 +16,24 @@ import type { OpenAIChatRequest } from "../types/openai.js";
 
 const KNOWN_MODELS = [
   "auto",
-  "composer-1.5",
-  "composer-1",
-  "opus-4.6-thinking",
-  "opus-4.6",
-  "opus-4.5-thinking",
-  "opus-4.5",
-  "sonnet-4.5-thinking",
-  "sonnet-4.5",
-  "gpt-5.3-codex",
-  "gpt-5.3-codex-fast",
-  "gpt-5.3-codex-low",
-  "gpt-5.3-codex-low-fast",
-  "gpt-5.3-codex-high",
-  "gpt-5.3-codex-high-fast",
-  "gpt-5.3-codex-xhigh",
-  "gpt-5.3-codex-xhigh-fast",
-  "gpt-5.3-codex-spark-preview",
-  "gpt-5.2",
-  "gpt-5.2-codex",
-  "gpt-5.2-codex-low",
-  "gpt-5.2-codex-low-fast",
-  "gpt-5.1-codex-max",
-  "gemini-3-pro",
-  "gemini-3-flash",
-  "grok",
+  "claude-opus-5-5",
+  "claude-opus-5-5-fast",
+  "composer-2.5",
+  "composer-2.5-fast",
+  "grok-4.6",
+  "grok-4.6-fast",
+  "grok-4.7",
+  "grok-4.7-fast",
 ];
 
-function extractApiKey(req: Request): string | undefined {
+const PROXY_API_KEY = process.env.PROXY_API_KEY?.trim();
+
+function isAuthorized(req: Request): boolean {
+  if (!PROXY_API_KEY) return true;
   const auth = req.headers.authorization;
-  if (auth?.startsWith("Bearer ")) {
-    const token = auth.slice(7).trim();
-    if (token && token !== "not-needed" && token !== "no-key" && token !== "null") {
-      return token;
-    }
-  }
-  return undefined;
+  return auth?.startsWith("Bearer ") === true && auth.slice(7).trim() === PROXY_API_KEY;
 }
+
 
 export async function handleChatCompletions(
   req: Request,
@@ -78,8 +59,11 @@ export async function handleChatCompletions(
       return;
     }
 
+    if (!isAuthorized(req)) {
+      res.status(401).json({ error: { message: "Invalid proxy API key", type: "authentication_error", code: "invalid_api_key" } });
+      return;
+    }
     const { prompt, model } = openaiToCli(body);
-    const apiKey = extractApiKey(req);
     console.error(
       `[chat] id=${requestId} model=${body.model} -> cli_model=${model} stream=${stream}`
     );
@@ -87,17 +71,21 @@ export async function handleChatCompletions(
     const subprocess = new CursorSubprocess();
 
     if (stream) {
-      await handleStreamingResponse(res, subprocess, prompt, model, requestId, apiKey);
+      await handleStreamingResponse(res, subprocess, prompt, model, requestId);
     } else {
-      await handleNonStreamingResponse(res, subprocess, prompt, model, requestId, apiKey);
+      await handleNonStreamingResponse(res, subprocess, prompt, model, requestId);
     }
+    return;
+
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error("[chat] Error:", message);
     if (!res.headersSent) {
-      res
-        .status(500)
-        .json({ error: { message, type: "server_error", code: null } });
+      const invalidRequest = message.startsWith("Unsupported reasoning effort:") || message.startsWith("Unsupported Cursor model:");
+      res.status(invalidRequest ? 400 : 500).json({
+        error: { message, type: invalidRequest ? "invalid_request_error" : "server_error", code: null },
+      });
+
     }
   }
 }
@@ -108,14 +96,12 @@ async function handleStreamingResponse(
   prompt: string,
   model: string,
   requestId: string,
-  apiKey?: string
 ): Promise<void> {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.setHeader("X-Request-Id", requestId);
   res.flushHeaders();
-
   res.write(":ok\n\n");
 
   return new Promise<void>((resolve) => {
@@ -180,7 +166,7 @@ async function handleStreamingResponse(
       resolve();
     });
 
-    subprocess.start(prompt, { model, apiKey }).catch((err) => {
+    subprocess.start(prompt, { model }).catch((err) => {
       console.error("[stream] Start error:", err);
       if (!res.writableEnded) {
         res.write(
@@ -205,7 +191,6 @@ async function handleNonStreamingResponse(
   prompt: string,
   model: string,
   requestId: string,
-  apiKey?: string
 ): Promise<void> {
   return new Promise<void>((resolve) => {
     let finalResult: ResultEvent | null = null;
@@ -244,7 +229,7 @@ async function handleNonStreamingResponse(
       resolve();
     });
 
-    subprocess.start(prompt, { model, apiKey }).catch((error) => {
+    subprocess.start(prompt, { model }).catch((error) => {
       if (!res.headersSent) {
         res.status(500).json({
           error: {

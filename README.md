@@ -96,18 +96,27 @@ Already have OpenClaw running? Edit the config file directly:
 
 ## Models
 
-Model IDs match `agent --list-models` output directly:
+The proxy intentionally exposes only these canonical model IDs:
 
-```bash
-auto                  # auto-select
-gpt-5.2               # GPT-5.2
-gpt-5.3-codex         # GPT-5.3 Codex
-opus-4.6-thinking     # Claude Opus 4.6 (thinking)
-sonnet-4.5-thinking   # Claude Sonnet 4.5 (thinking)
-gemini-3-pro          # Gemini 3 Pro
+```text
+claude-opus-5-5
+claude-opus-5-5-fast
+composer-2.5
+composer-2.5-fast
+grok-4.6
+grok-4.6-fast
+grok-4.7
+grok-4.7-fast
 ```
 
-Full list: `curl http://localhost:4646/v1/models` or `agent --list-models`.
+`claude-opus-5-5` defaults to Cursor's 1M context, high-effort, normal-speed
+variant. `claude-opus-5-5-fast` selects the 1M high-effort Fast variant.
+`auto` uses the normal Opus 5.5 default. Models outside this whitelist are
+rejected instead of silently routing to a fallback.
+
+OpenAI-compatible clients may optionally send `reasoning_effort` or
+`reasoning.effort` with an Opus request. The model ID remains canonical while
+the proxy changes only Cursor's effort setting and preserves the 1M context.
 
 ## API
 
@@ -122,7 +131,12 @@ Full list: `curl http://localhost:4646/v1/models` or `agent --list-models`.
 | Env Variable | Default | Description |
 |--------------|---------|-------------|
 | `PORT` | `4646` | Listen port (or `cursor-agent-api start 8080`) |
-| `CURSOR_API_KEY` | - | Alternative to `agent login` |
+| `CURSOR_API_KEY` | - | Alternative Cursor authentication to `agent login` |
+| `PROXY_API_KEY` | - | Incoming API key for `/v1/chat/completions`; required outside a trusted private network |
+
+`PROXY_API_KEY` authenticates clients to the proxy. It is separate from
+`CURSOR_API_KEY`, which authenticates the proxy to Cursor. For hosted
+deployments, configure both through secret storage and never commit them.
 
 ## Auto-start (boot)
 

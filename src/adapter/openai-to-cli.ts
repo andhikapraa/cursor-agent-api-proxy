@@ -5,41 +5,21 @@
 
 import type { OpenAIChatMessage, OpenAIChatRequest, OpenAIContentPart } from "../types/openai.js";
 
-const KNOWN_CURSOR_MODELS = new Set([
-  "auto",
-  "composer-1.5",
-  "composer-1",
-  "gpt-5.3-codex",
-  "gpt-5.3-codex-low",
-  "gpt-5.3-codex-high",
-  "gpt-5.3-codex-xhigh",
-  "gpt-5.3-codex-fast",
-  "gpt-5.3-codex-low-fast",
-  "gpt-5.3-codex-high-fast",
-  "gpt-5.3-codex-xhigh-fast",
-  "gpt-5.2",
-  "gpt-5.2-codex",
-  "gpt-5.2-codex-high",
-  "gpt-5.2-codex-low",
-  "gpt-5.2-codex-xhigh",
-  "gpt-5.2-codex-fast",
-  "gpt-5.2-codex-high-fast",
-  "gpt-5.2-codex-low-fast",
-  "gpt-5.2-codex-xhigh-fast",
-  "gpt-5.1-codex-max",
-  "gpt-5.1-codex-max-high",
-  "opus-4.6-thinking",
-  "sonnet-4.5-thinking",
-  "gpt-5.2-high",
-  "opus-4.6",
-  "opus-4.5",
-  "opus-4.5-thinking",
-  "sonnet-4.5",
-  "gpt-5.1-high",
-  "gemini-3-pro",
-  "gemini-3-flash",
-  "grok",
-]);
+const DEFAULT_CURSOR_MODEL = "claude-opus-5-5[context=1m,effort=high,fast=false]";
+const MODEL_ALIASES: Record<string, string> = {
+  "claude-opus-5-5": DEFAULT_CURSOR_MODEL,
+  "claude-opus-5-5-fast": "claude-opus-5-5[context=1m,effort=high,fast=true]",
+  "composer-2.5": "composer-2.5",
+  "composer-2.5-fast": "composer-2.5-fast",
+  "grok-4.6": "cursor-grok-4.6-high",
+  "grok-4.6-fast": "cursor-grok-4.6-high-fast",
+  "grok-4.7": "grok-4.7-high",
+  "grok-4.7-fast": "grok-4.7-high-fast",
+};
+const KNOWN_CURSOR_MODELS = new Set(Object.keys(MODEL_ALIASES));
+
+const OPUS_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
+
 
 export interface CliInput {
   prompt: string;
@@ -56,23 +36,12 @@ export interface CliInput {
  *   "opus-4.6-thinking"   -> "opus-4.6-thinking"
  */
 export function extractModel(model: string): string {
-  if (model.startsWith("cursor/")) {
-    return model.slice("cursor/".length) || "auto";
-  }
-
-  if (model.startsWith("cursor-")) {
-    const remainder = model.slice("cursor-".length);
-    if (remainder && KNOWN_CURSOR_MODELS.has(remainder)) {
-      return remainder;
-    }
-    if (remainder) return remainder;
-  }
-
-  if (KNOWN_CURSOR_MODELS.has(model)) {
-    return model;
-  }
-
-  return "auto";
+  const requested = model.trim();
+  if (!requested || requested === "auto") return DEFAULT_CURSOR_MODEL;
+  const normalized = requested.startsWith("cursor/") ? requested.slice("cursor/".length) : requested;
+  const mapped = MODEL_ALIASES[normalized];
+  if (mapped) return mapped;
+  throw new Error(`Unsupported Cursor model: ${requested}`);
 }
 
 function messageContentToText(content: string | OpenAIContentPart[]): string {
@@ -121,8 +90,13 @@ export function messagesToPrompt(messages: OpenAIChatMessage[]): string {
 }
 
 export function openaiToCli(request: OpenAIChatRequest): CliInput {
-  return {
-    prompt: messagesToPrompt(request.messages),
-    model: extractModel(request.model || "auto"),
-  };
+  const model = extractModel(request.model || "auto");
+  const effort = request.reasoning?.effort ?? request.reasoning_effort;
+  if (effort !== undefined && !OPUS_EFFORTS.has(effort)) {
+    throw new Error(`Unsupported reasoning effort: ${effort}`);
+  }
+  const resolvedModel = effort && model.startsWith("claude-opus-5-5[context=1m,")
+    ? `claude-opus-5-5[context=1m,effort=${effort},fast=${model.includes("fast=true")}]`
+    : model;
+  return { prompt: messagesToPrompt(request.messages), model: resolvedModel };
 }
