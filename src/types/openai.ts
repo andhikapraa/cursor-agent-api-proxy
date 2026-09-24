@@ -17,6 +17,8 @@ export interface OpenAIChatRequest {
   model?: string;
   messages: OpenAIChatMessage[];
   stream?: boolean;
+  reasoning_effort?: "low" | "medium" | "high" | "xhigh" | "max";
+  reasoning?: { effort?: "low" | "medium" | "high" | "xhigh" | "max" };
   temperature?: number;
   max_tokens?: number;
   user?: string;

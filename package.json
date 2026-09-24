@@ -10,6 +10,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "test": "pnpm run build && node test/model-mapping.mjs",
     "dev": "tsc --watch",
     "start": "node dist/server/standalone.js",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
