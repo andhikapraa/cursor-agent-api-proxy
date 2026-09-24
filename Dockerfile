@@ -1,4 +1,4 @@
-FROM node:22-bookworm
+FROM node:22-bookworm-slim
 
 ENV NODE_ENV=production \
     PORT=4646 \
@@ -6,7 +6,7 @@ ENV NODE_ENV=production \
     PATH=/home/cursorproxy/.local/bin:$PATH
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && apt-get install -y --no-install-recommends ca-certificates curl libstdc++6 \
     && mkdir -p /home/cursorproxy \
     && HOME=/home/cursorproxy bash -c 'curl https://cursor.com/install -fsS | bash' \
     && rm -rf /var/lib/apt/lists/*
