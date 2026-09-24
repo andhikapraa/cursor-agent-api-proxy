@@ -2,7 +2,7 @@ name: Build and publish Cursor proxy image
 
 on:
   push:
-    branches: [main]
+    branches: [main, ci-cursor-proxy-image]
   workflow_dispatch:
 
 permissions:
