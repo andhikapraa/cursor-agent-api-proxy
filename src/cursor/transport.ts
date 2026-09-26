@@ -435,7 +435,7 @@ export class CursorAgentTransport {
             } catch (error) {
               finish(error instanceof Error ? error : new Error(String(error)));
               return;
-            }
+          }
           }
           let event;
           try {
@@ -444,6 +444,7 @@ export class CursorAgentTransport {
             event = null;
           }
           if (event) {
+            if (process.env.CURSOR_DEBUG === "1") console.error("[cursor-raw] exec", event.kind, event.kind === "exec_mcp" ? event.toolName : "");
             const dedupe = `${event.kind}:${event.execId}:${event.execMsgId}`;
             if (!acked.has(dedupe)) {
               acked.add(dedupe);
