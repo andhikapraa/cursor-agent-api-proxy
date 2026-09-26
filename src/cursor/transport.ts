@@ -203,6 +203,18 @@ export class CursorAgentTransport {
   ): Promise<CursorTransportResult> {
     let session = sessions.get(sessionKey);
     if (!session) {
+      const toolResultIds = new Set(
+        request.messages
+          .filter((message) => message.role === "tool" && message.tool_call_id)
+          .map((message) => message.tool_call_id as string),
+      );
+      if (toolResultIds.size > 0) {
+        session = [...sessions.values()].find((candidate) =>
+          [...candidate.pending.keys()].some((id) => toolResultIds.has(id)),
+        );
+      }
+    }
+    if (!session) {
       const model = modelSelection(request);
       const apiKey = process.env.CURSOR_API_KEY?.trim();
       session = {
