@@ -26,11 +26,9 @@ resetCursorTransportSessions();
 const transport = new CursorAgentTransport({ createAgent });
 const tool = {
   type: "function",
-  function: {
-    name: "lookup",
-    description: "Look something up",
-    parameters: { type: "object", properties: { query: { type: "string" } } },
-  },
+  name: "lookup",
+  description: "Look something up",
+  parameters: { type: "object", properties: { query: { type: "string" } } },
 };
 const first = await transport.execute("test-session", {
   model: "claude-opus-5-5",
