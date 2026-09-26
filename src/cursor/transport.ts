@@ -302,7 +302,7 @@ function parseFrames(
     if (offset + 5 + length > buffer.length) break;
     const raw = buffer.subarray(offset + 5, offset + 5 + length);
     const payload = flags & 1 ? zlib.gunzipSync(raw) : raw;
-    onFrame(payload);
+    if ((flags & 0x02) === 0) onFrame(payload);
     offset += 5 + length;
   }
   return offset > 0 ? buffer.subarray(offset) : buffer;
