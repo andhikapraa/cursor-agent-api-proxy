@@ -94,11 +94,12 @@ function modelSelection(request: OpenAIChatRequest): { id: string; params?: Arra
 function customToolsFor(session: SessionState, tools: OpenAITool[] | undefined): SessionState["customTools"] {
   const result: SessionState["customTools"] = {};
   for (const tool of tools ?? []) {
-    const name = tool.function.name;
-    if (tool.type !== "function" || BUILTIN_TOOL_NAMES.has(name)) continue;
+    const definition = tool.function ?? tool;
+    const name = definition.name;
+    if (tool.type !== "function" || !name || BUILTIN_TOOL_NAMES.has(name)) continue;
     result[name] = {
-      description: tool.function.description,
-      inputSchema: tool.function.parameters,
+      description: definition.description,
+      inputSchema: definition.parameters,
       execute: async (args: Record<string, unknown>, context: { toolCallId?: string }) => {
         const callId = context.toolCallId ?? `call_${Date.now().toString(36)}`;
         const call: OpenAIToolCall = {

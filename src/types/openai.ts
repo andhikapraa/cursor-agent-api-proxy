@@ -8,11 +8,15 @@ export interface OpenAIContentPart {
 
 export type OpenAITool = {
   type: "function";
-  function: {
+  function?: {
     name: string;
     description?: string;
     parameters?: Record<string, unknown>;
   };
+  // Axon’s Responses-to-Chat adapter may flatten function fields.
+  name?: string;
+  description?: string;
+  parameters?: Record<string, unknown>;
 };
 
 export type OpenAIToolCall = {
