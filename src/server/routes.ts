@@ -1,32 +1,19 @@
-/**
- * API route handlers — OpenAI-compatible endpoints backed by Cursor CLI.
- */
+/** OpenAI-compatible endpoints backed by the local @cursor/sdk Agent runtime. */
 
 import type { Request, Response } from "express";
+import { createHash } from "node:crypto";
 import { v4 as uuidv4 } from "uuid";
-import { CursorSubprocess } from "../subprocess/manager.js";
-import type { ContentDeltaEvent, ResultEvent } from "../subprocess/manager.js";
-import { openaiToCli } from "../adapter/openai-to-cli.js";
-import {
-  createStreamChunk,
-  createDoneChunk,
-  createChatResponse,
-} from "../adapter/cli-to-openai.js";
-import type { OpenAIChatRequest } from "../types/openai.js";
+import { CursorAgentTransport } from "../cursor/transport.js";
+import type {
+  OpenAIChatChunk,
+  OpenAIChatRequest,
+  OpenAIChatResponse,
+  OpenAIToolCall,
+} from "../types/openai.js";
 
-const KNOWN_MODELS = [
-  "auto",
-  "claude-opus-5-5",
-  "claude-opus-5-5-fast",
-  "composer-2.5",
-  "composer-2.5-fast",
-  "grok-4.6",
-  "grok-4.6-fast",
-  "grok-4.7",
-  "grok-4.7-fast",
-];
-
+const MODEL_ID = "claude-opus-5-5";
 const PROXY_API_KEY = process.env.PROXY_API_KEY?.trim();
+const transport = new CursorAgentTransport();
 
 function isAuthorized(req: Request): boolean {
   if (!PROXY_API_KEY) return true;
@@ -34,228 +21,146 @@ function isAuthorized(req: Request): boolean {
   return auth?.startsWith("Bearer ") === true && auth.slice(7).trim() === PROXY_API_KEY;
 }
 
+function contentText(content: OpenAIChatRequest["messages"][number]["content"]): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.filter((part) => part.type === "text").map((part) => part.text ?? "").join("");
+}
 
-export async function handleChatCompletions(
-  req: Request,
-  res: Response
-): Promise<void> {
+function sessionKey(req: Request, body: OpenAIChatRequest): string {
+  const header = req.header("x-cursor-session-id")?.trim();
+  if (header) return `header:${header.slice(0, 256)}`;
+  const seed = body.messages.find((message) => message.role === "user");
+  const identity = body.user ?? req.ip ?? "anonymous";
+  const digest = createHash("sha256").update(`${identity}\0${contentText(seed?.content ?? "")}`).digest("hex").slice(0, 32);
+  return `default:${digest}`;
+}
+
+function writeSse(res: Response, payload: OpenAIChatChunk | "[DONE]"): void {
+  if (!res.writableEnded) res.write(`data: ${typeof payload === "string" ? payload : JSON.stringify(payload)}\n\n`);
+}
+
+function chunk(
+  requestId: string,
+  model: string,
+  delta: OpenAIChatChunk["choices"][number]["delta"],
+  finishReason: OpenAIChatChunk["choices"][number]["finish_reason"] = null,
+): OpenAIChatChunk {
+  return {
+    id: `chatcmpl-${requestId}`,
+    object: "chat.completion.chunk",
+    created: Math.floor(Date.now() / 1000),
+    model,
+    choices: [{ index: 0, delta, finish_reason: finishReason }],
+  };
+}
+
+function errorResponse(res: Response, status: number, message: string, type = "server_error"): void {
+  if (!res.headersSent) res.status(status).json({ error: { message, type, code: null } });
+}
+
+export async function handleChatCompletions(req: Request, res: Response): Promise<void> {
   const requestId = uuidv4().replace(/-/g, "").slice(0, 24);
   const body = req.body as OpenAIChatRequest;
-  const stream = body.stream === true;
-
   try {
-    if (
-      !body.messages ||
-      !Array.isArray(body.messages) ||
-      body.messages.length === 0
-    ) {
-      res.status(400).json({
-        error: {
-          message: "messages is required and must be a non-empty array",
-          type: "invalid_request_error",
-          code: "invalid_messages",
-        },
-      });
-      return;
-    }
-
     if (!isAuthorized(req)) {
-      res.status(401).json({ error: { message: "Invalid proxy API key", type: "authentication_error", code: "invalid_api_key" } });
+      errorResponse(res, 401, "Invalid proxy API key", "authentication_error");
       return;
     }
-    const { prompt, model } = openaiToCli(body);
-    console.error(
-      `[chat] id=${requestId} model=${body.model} -> cli_model=${model} stream=${stream}`
-    );
+    if (!body || !Array.isArray(body.messages) || body.messages.length === 0) {
+      errorResponse(res, 400, "messages is required and must be a non-empty array", "invalid_request_error");
+      return;
+    }
+    if (body.model && body.model !== MODEL_ID) {
+      errorResponse(res, 400, `Unsupported Cursor model: ${body.model}`, "invalid_request_error");
+      return;
+    }
 
-    const subprocess = new CursorSubprocess();
+    const stream = body.stream === true;
+    const model = MODEL_ID;
+    const key = sessionKey(req, body);
+    let sawRole = false;
+    let text = "";
+    let reasoning = "";
+    const toolCalls: OpenAIToolCall[] = [];
 
     if (stream) {
-      await handleStreamingResponse(res, subprocess, prompt, model, requestId);
-    } else {
-      await handleNonStreamingResponse(res, subprocess, prompt, model, requestId);
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.setHeader("X-Request-Id", requestId);
+      res.flushHeaders();
+      res.write(":ok\n\n");
     }
-    return;
 
+    const result = await transport.execute(key, body, {
+      onText: (delta) => {
+        text += delta;
+        if (stream) {
+          writeSse(res, chunk(requestId, model, { ...(sawRole ? {} : { role: "assistant" }), content: delta }));
+          sawRole = true;
+        }
+      },
+      onReasoning: (delta) => {
+        reasoning += delta;
+        if (stream) writeSse(res, chunk(requestId, model, { reasoning_content: delta }));
+      },
+      onToolCall: (call) => {
+        toolCalls.push(call);
+        if (stream) {
+          writeSse(res, chunk(requestId, model, {
+            tool_calls: [{ index: toolCalls.length - 1, id: call.id, type: "function", function: call.function }],
+          }));
+        }
+      },
+    });
+
+    if (stream) {
+      writeSse(res, chunk(requestId, model, {}, result.status === "tool_calls" ? "tool_calls" : "stop"));
+      writeSse(res, "[DONE]");
+      if (!res.writableEnded) res.end();
+      return;
+    }
+
+    const response: OpenAIChatResponse = {
+      id: `chatcmpl-${requestId}`,
+      object: "chat.completion",
+      created: Math.floor(Date.now() / 1000),
+      model,
+      choices: [{
+        index: 0,
+        message: {
+          role: "assistant",
+          content: result.text || null,
+          ...(result.reasoning ? { reasoning_content: result.reasoning } : {}),
+          ...(result.toolCalls.length ? { tool_calls: result.toolCalls } : {}),
+        },
+        finish_reason: result.status === "tool_calls" ? "tool_calls" : "stop",
+      }],
+      usage: {
+        prompt_tokens: result.usage?.inputTokens ?? 0,
+        completion_tokens: result.usage?.outputTokens ?? 0,
+        total_tokens: (result.usage?.inputTokens ?? 0) + (result.usage?.outputTokens ?? 0),
+      },
+    };
+    res.json(response);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    console.error("[chat] Error:", message);
-    if (!res.headersSent) {
-      const invalidRequest = message.startsWith("Unsupported reasoning effort:") || message.startsWith("Unsupported Cursor model:");
-      res.status(invalidRequest ? 400 : 500).json({
-        error: { message, type: invalidRequest ? "invalid_request_error" : "server_error", code: null },
-      });
-
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[chat] id=${requestId} error=${message}`);
+    if (res.headersSent) {
+      if (!res.writableEnded) {
+        writeSse(res, { id: `chatcmpl-${requestId}`, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: MODEL_ID, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
+        writeSse(res, "[DONE]");
+        res.end();
+      }
+    } else {
+      errorResponse(res, 500, message);
     }
   }
 }
 
-async function handleStreamingResponse(
-  res: Response,
-  subprocess: CursorSubprocess,
-  prompt: string,
-  model: string,
-  requestId: string,
-): Promise<void> {
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-  res.setHeader("X-Request-Id", requestId);
-  res.flushHeaders();
-  res.write(":ok\n\n");
-
-  return new Promise<void>((resolve) => {
-    let isFirst = true;
-    let lastModel = model;
-    let isComplete = false;
-
-    res.on("close", () => {
-      if (!isComplete) subprocess.kill();
-      resolve();
-    });
-
-    subprocess.on("content_delta", (delta: ContentDeltaEvent) => {
-      if (delta.text && !res.writableEnded) {
-        const chunk = createStreamChunk(requestId, lastModel, delta.text, isFirst);
-        res.write(`data: ${JSON.stringify(chunk)}\n\n`);
-        isFirst = false;
-      }
-    });
-
-    subprocess.on("result", (result: ResultEvent) => {
-      isComplete = true;
-      if (result.model) lastModel = result.model;
-      if (!res.writableEnded) {
-        const done = createDoneChunk(requestId, lastModel);
-        res.write(`data: ${JSON.stringify(done)}\n\n`);
-        res.write("data: [DONE]\n\n");
-        res.end();
-      }
-      resolve();
-    });
-
-    subprocess.on("error", (error: Error) => {
-      console.error("[stream] Error:", error.message);
-      if (!res.writableEnded) {
-        res.write(
-          `data: ${JSON.stringify({
-            error: { message: error.message, type: "server_error", code: null },
-          })}\n\n`
-        );
-        res.end();
-      }
-      resolve();
-    });
-
-    subprocess.on("close", (code: number | null) => {
-      if (!res.writableEnded) {
-        if (code !== 0 && !isComplete) {
-          res.write(
-            `data: ${JSON.stringify({
-              error: {
-                message: `Process exited with code ${code}`,
-                type: "server_error",
-                code: null,
-              },
-            })}\n\n`
-          );
-        }
-        res.write("data: [DONE]\n\n");
-        res.end();
-      }
-      resolve();
-    });
-
-    subprocess.start(prompt, { model }).catch((err) => {
-      console.error("[stream] Start error:", err);
-      if (!res.writableEnded) {
-        res.write(
-          `data: ${JSON.stringify({
-            error: {
-              message: err instanceof Error ? err.message : String(err),
-              type: "server_error",
-              code: null,
-            },
-          })}\n\n`
-        );
-        res.end();
-      }
-      resolve();
-    });
-  });
-}
-
-async function handleNonStreamingResponse(
-  res: Response,
-  subprocess: CursorSubprocess,
-  prompt: string,
-  model: string,
-  requestId: string,
-): Promise<void> {
-  return new Promise<void>((resolve) => {
-    let finalResult: ResultEvent | null = null;
-
-    subprocess.on("result", (result: ResultEvent) => {
-      finalResult = result;
-    });
-
-    subprocess.on("error", (error: Error) => {
-      console.error("[non-stream] Error:", error.message);
-      if (!res.headersSent) {
-        res.status(500).json({
-          error: { message: error.message, type: "server_error", code: null },
-        });
-      }
-      resolve();
-    });
-
-    subprocess.on("close", () => {
-      if (finalResult) {
-        const response = createChatResponse(
-          requestId,
-          finalResult.model || model,
-          finalResult.text
-        );
-        res.json(response);
-      } else if (!res.headersSent) {
-        res.status(500).json({
-          error: {
-            message: "CLI exited without producing a result",
-            type: "server_error",
-            code: null,
-          },
-        });
-      }
-      resolve();
-    });
-
-    subprocess.start(prompt, { model }).catch((error) => {
-      if (!res.headersSent) {
-        res.status(500).json({
-          error: {
-            message: error instanceof Error ? error.message : String(error),
-            type: "server_error",
-            code: null,
-          },
-        });
-      }
-      resolve();
-    });
-  });
-}
-
 export function handleModels(_req: Request, res: Response): void {
-  const now = Math.floor(Date.now() / 1000);
-
-  res.json({
-    object: "list",
-    data: KNOWN_MODELS.map((id) => ({
-      id,
-      object: "model" as const,
-      owned_by: "cursor",
-      created: now,
-    })),
-  });
+  res.json({ object: "list", data: [{ id: MODEL_ID, object: "model", owned_by: "cursor", created: Math.floor(Date.now() / 1000) }] });
 }
 
 let cachedCliVersion: string | undefined;
@@ -265,10 +170,5 @@ export function setCachedCliVersion(version: string): void {
 }
 
 export function handleHealth(_req: Request, res: Response): void {
-  res.json({
-    status: "ok",
-    provider: "cursor-agent-api-proxy",
-    cli_version: cachedCliVersion ?? "unknown",
-    timestamp: new Date().toISOString(),
-  });
+  res.json({ status: "ok", provider: "cursor-agent-api-proxy", cli_version: cachedCliVersion ?? "unknown", timestamp: new Date().toISOString() });
 }

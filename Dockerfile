@@ -6,9 +6,7 @@ ENV NODE_ENV=production \
     PATH=/home/cursorproxy/.local/bin:$PATH
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl libstdc++6 \
-    && mkdir -p /home/cursorproxy \
-    && HOME=/home/cursorproxy bash -c 'curl https://cursor.com/install -fsS | bash' \
+    && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -24,7 +22,6 @@ RUN pnpm run build \
     && pnpm prune --prod
 
 RUN useradd --create-home --shell /usr/sbin/nologin cursorproxy \
-    && mkdir -p /home/cursorproxy/.cursor \
     && chown -R cursorproxy:cursorproxy /app /home/cursorproxy
 
 USER cursorproxy

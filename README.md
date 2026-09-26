@@ -6,38 +6,31 @@
 
 [中文文档](./README.zh-CN.md)
 
-OpenAI-compatible API proxy for the Cursor CLI. Lets any OpenAI client use your Cursor subscription.
+OpenAI-compatible API proxy for the local `@cursor/sdk` Agent runtime. Lets any OpenAI client use your Cursor subscription.
 
 ## Prerequisites
 
-- Node.js 20+
+- Node.js 22+
 - Active [Cursor](https://cursor.com) subscription (Pro / Business)
+- Cursor user API key from [Cursor settings](https://cursor.com/settings)
+
+The proxy uses Cursor's direct local Agent SDK and AgentService transport. It
+does not require a separately installed Cursor CLI or an interactive `agent
+login` session.
 
 ## Install
 
-**1. Install the Cursor CLI and log in:**
+**1. Configure Cursor authentication:**
 
 ```bash
-# macOS / Linux
-curl https://cursor.com/install -fsS | bash
-
-# Windows PowerShell
-irm 'https://cursor.com/install?win32=true' | iex
+export CURSOR_API_KEY=crsr_...
 ```
-
-```bash
-agent login          # opens browser, sign in with your Cursor account
-agent --list-models  # verify it works
-```
-
-> **Headless?** Skip `agent login`, generate a key at [cursor.com/settings](https://cursor.com/settings) and `export CURSOR_API_KEY=<key>`.
 
 **2. Install and start the proxy:**
 
 ```bash
 npm install -g cursor-agent-api-proxy
-cursor-agent-api          # starts in background on http://localhost:4646
-cursor-agent-api status   # check if running
+cursor-agent-api run
 ```
 
 **3. Verify:**
@@ -46,16 +39,8 @@ cursor-agent-api status   # check if running
 curl http://localhost:4646/health
 ```
 
-**Other commands:**
-
-```bash
-cursor-agent-api stop           # stop
-cursor-agent-api restart        # restart
-cursor-agent-api start 8080     # start on a custom port
-cursor-agent-api run            # run in foreground (for debugging)
-```
-
-Logs: `~/.cursor-agent-api/server.log`
+The container deployment should provide `CURSOR_API_KEY` and `PROXY_API_KEY`
+through secret storage rather than putting either key in a command or file.
 
 ## Use with OpenClaw
 
@@ -69,9 +54,9 @@ openclaw onboard
 
 When the wizard asks you to configure **Model/Auth**:
 
-1. Provider type → choose **Custom Provider** (OpenAI-compatible)
 2. Base URL → `http://localhost:4646/v1`
-3. API Key → type `not-needed` (if you ran `agent login`)
+3. API Key → your `PROXY_API_KEY`
+4. Default model → `claude-opus-5-5`
 4. Default model → `auto` (or any model from `agent --list-models`)
 
 ### Existing setup (edit config)
@@ -81,14 +66,12 @@ Already have OpenClaw running? Edit the config file directly:
 ```json5
 {
   env: {
-    // "not-needed" = already logged in via agent login
-    // or set your Cursor API Key here to forward it per-request
-    OPENAI_API_KEY: "not-needed",
+    OPENAI_API_KEY: "<PROXY_API_KEY>",
     OPENAI_BASE_URL: "http://localhost:4646/v1",
   },
   agents: {
     defaults: {
-      model: { primary: "openai/auto" },
+      model: { primary: "openai/claude-opus-5-5" },
     },
   },
 }
@@ -123,8 +106,22 @@ the proxy changes only Cursor's effort setting and preserves the 1M context.
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Health check |
-| `/v1/models` | GET | List models |
-| `/v1/chat/completions` | POST | Chat completion (supports `stream: true`) |
+| `/v1/models` | GET | List the canonical `claude-opus-5-5` model |
+| `/v1/chat/completions` | POST | Chat completion (streaming, reasoning, and client tool calls) |
+
+### Tool calls and session continuation
+
+Send OpenAI `tools` in a chat request. The proxy registers those functions as
+Cursor SDK custom tools and returns normal OpenAI `tool_calls`; it does not
+execute client tools. The caller must send the matching `role: "tool"` result
+in a later request so the paused SDK run can continue.
+
+For reliable correlation, set `x-cursor-session-id` to a stable conversation
+identifier on every request in the turn. Without that header, the proxy uses a
+deterministic key derived from the authenticated caller (or request IP) and
+the first user message. This fallback is intended for simple one-conversation
+clients; concurrent conversations with the same identity and first prompt
+must use the explicit header to avoid sharing in-memory session state.
 
 ## Configuration
 
