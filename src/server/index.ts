@@ -32,7 +32,7 @@ export async function startServer(
     );
     res.setHeader(
       "Access-Control-Allow-Headers",
-      "Content-Type, Authorization"
+      "Content-Type, Authorization, X-Cursor-Session-Id"
     );
     next();
   });
