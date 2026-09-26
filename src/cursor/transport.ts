@@ -451,7 +451,7 @@ export class CursorAgentTransport {
               if (event.kind === "exec_request_context") {
                 // MCP definitions are carried by AgentRunRequest.mcp_tools.
                 // Cursor expects an empty RequestContext success here.
-                writeFrame(stream.req, encodeRequestContextResponse(event.execMsgId, event.execId));
+                writeFrame(stream.req, encodeRequestContextResponse(event.execMsgId, event.execId, tools));
               } else if (event.kind === "exec_mcp") {
                 const id = event.toolCallId || `call_${crypto.randomUUID().replaceAll("-", "").slice(0, 24)}`;
                 const call: OpenAIToolCall = {
