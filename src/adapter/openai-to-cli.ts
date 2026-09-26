@@ -44,7 +44,8 @@ export function extractModel(model: string): string {
   throw new Error(`Unsupported Cursor model: ${requested}`);
 }
 
-function messageContentToText(content: string | OpenAIContentPart[]): string {
+function messageContentToText(content: string | OpenAIContentPart[] | null): string {
+  if (content === null) return "";
   if (typeof content === "string") return content;
 
   return content
@@ -63,7 +64,7 @@ function messageContentToText(content: string | OpenAIContentPart[]): string {
 export function messagesToPrompt(messages: OpenAIChatMessage[]): string {
   const nonEmpty = messages.filter((m) => {
     const text = messageContentToText(m.content);
-    return text.length > 0;
+    return text.length > 0 || m.role === "tool" || Boolean(m.tool_calls?.length);
   });
 
   if (nonEmpty.length === 1 && nonEmpty[0].role === "user") {
@@ -73,6 +74,9 @@ export function messagesToPrompt(messages: OpenAIChatMessage[]): string {
   const parts: string[] = [];
   for (const msg of nonEmpty) {
     const text = messageContentToText(msg.content);
+    const calls = msg.tool_calls?.map((call) =>
+      `${call.function.name}(${call.function.arguments})`,
+    ).join(", ");
     switch (msg.role) {
       case "system":
         parts.push(`[System]\n${text}`);
@@ -81,7 +85,10 @@ export function messagesToPrompt(messages: OpenAIChatMessage[]): string {
         parts.push(`[User]\n${text}`);
         break;
       case "assistant":
-        parts.push(`[Assistant]\n${text}`);
+        parts.push(`[Assistant]\n${text}${calls ? `\n[Tool calls: ${calls}]` : ""}`);
+        break;
+      case "tool":
+        parts.push(`[Tool result ${msg.tool_call_id ?? ""}]\n${text}`);
         break;
     }
   }

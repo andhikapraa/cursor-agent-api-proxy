@@ -15,7 +15,6 @@
 
 import { startServer, stopServer } from "./index.js";
 import { setCachedCliVersion } from "./routes.js";
-import { verifyCursorCli } from "../subprocess/manager.js";
 import { installService, uninstallService } from "../service/install.js";
 import {
   daemonStart,
@@ -56,24 +55,6 @@ Options:
 }
 
 async function runForeground(port: number): Promise<void> {
-  console.log("Checking Cursor CLI (agent)...");
-  const check = await verifyCursorCli();
-  if (check.ok) {
-    console.log(`  Cursor CLI: ${check.version || "OK"}`);
-    if (check.version) setCachedCliVersion(check.version);
-  } else {
-    console.error(`  ${check.error}`);
-    console.error("\nPlease install and authenticate the Cursor CLI first:");
-    if (process.platform === "win32") {
-      console.error("  irm 'https://cursor.com/install?win32=true' | iex");
-      console.error("  agent login");
-    } else {
-      console.error("  curl https://cursor.com/install -fsS | bash");
-      console.error("  agent login");
-    }
-    process.exit(1);
-  }
-
   try {
     await startServer({ port });
     registerForegroundPid();
@@ -85,6 +66,7 @@ async function runForeground(port: number): Promise<void> {
     console.error("Failed to start server:", err);
     process.exit(1);
   }
+
 
   const shutdown = async () => {
     console.log("\nShutting down...");
