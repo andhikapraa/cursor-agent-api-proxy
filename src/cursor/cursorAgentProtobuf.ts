@@ -435,7 +435,7 @@ export function openAIToolsToMcpDefs(tools: OpenAITool[]): McpToolDefinition[] {
       name: t.function.name,
       description: t.function.description ?? "",
       inputSchemaBytes: jsonSchemaToProtobufValue(params),
-      providerIdentifier: "omniroute",
+      providerIdentifier: "custom-user-tools",
       toolName: t.function.name,
     };
   });
