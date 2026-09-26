@@ -77,6 +77,28 @@ type OpenedStream = {
 };
 
 type EndReason = "turn_ended" | "kv_after_text" | "tool_calls" | "server_end" | null;
+let cachedCursorToken: { token: string; expiresAt: number } | undefined;
+
+async function resolveCursorAccessToken(apiKey: string | undefined): Promise<string | undefined> {
+  if (!apiKey) return undefined;
+  if (!apiKey.startsWith("crsr_")) return apiKey;
+  if (cachedCursorToken && cachedCursorToken.expiresAt > Date.now() + 60_000) return cachedCursorToken.token;
+  const response = await fetch("https://api2.cursor.sh/auth/exchange_user_api_key", {
+    method: "POST",
+    headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+    body: "{}",
+  });
+  if (!response.ok) throw new Error(`Cursor API-key exchange failed: HTTP ${response.status}`);
+  const data = await response.json() as { accessToken?: string };
+  if (!data.accessToken) throw new Error("Cursor API-key exchange returned no access token");
+  let expiresAt = Date.now() + 50 * 60_000;
+  try {
+    const payload = JSON.parse(Buffer.from(data.accessToken.split(".")[1]!, "base64url").toString("utf8"));
+    if (Number.isFinite(payload.exp)) expiresAt = payload.exp * 1000;
+  } catch {}
+  cachedCursorToken = { token: data.accessToken, expiresAt };
+  return data.accessToken;
+}
 
 const CURSOR_AGENT_HOST = process.env.CURSOR_AGENT_HOST?.trim() || "agentn.global.api5.cursor.sh";
 const CURSOR_AGENT_PATH = "/agent.v1.AgentService/Run";
@@ -353,7 +375,8 @@ export class CursorAgentTransport {
         systemPrompt: systemPrompt(request.messages),
         blobStore,
       });
-      const opened = await openH2(this.connect, body, apiKey);
+      const accessToken = await resolveCursorAccessToken(apiKey);
+      const opened = await openH2(this.connect, body, accessToken);
       if (opened.status !== 200) {
         const errorBody = await opened.consumeError();
         throw new Error(`Cursor AgentService returned HTTP ${opened.status}: ${errorBody.toString("utf8") || "upstream error"}`);
