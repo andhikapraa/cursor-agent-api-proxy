@@ -1,11 +1,7 @@
 /** Direct local @cursor/sdk transport with OpenAI tool-call continuation. */
 
 import { Agent } from "@cursor/sdk";
-import type {
-  SDKAgent,
-  SendOptions,
-} from "@cursor/sdk";
-import type { Run, RunResult } from "@cursor/sdk";
+import type { SDKAgent, SDKUserMessage, SendOptions, Run, RunResult } from "@cursor/sdk";
 import type {
   OpenAIChatMessage,
   OpenAIChatRequest,
@@ -73,16 +69,32 @@ function contentToText(content: OpenAIChatMessage["content"]): string {
   return content.filter((part) => part.type === "text").map((part) => part.text ?? "").join("");
 }
 
-function messagesToPrompt(messages: OpenAIChatMessage[]): string {
-  return messages.map((message) => {
-    const text = contentToText(message.content);
-    if (message.role === "tool") return `[Tool result ${message.tool_call_id ?? ""}]\n${text}`;
+type CursorImage = NonNullable<SDKUserMessage["images"]>[number];
+
+function contentToImages(content: OpenAIChatMessage["content"]): CursorImage[] {
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((part): CursorImage[] => {
+    const url = part.type === "image_url" ? part.image_url?.url : undefined;
+    if (!url) return [];
+    const dataUrl = url.match(/^data:([^;,]+);base64,(.+)$/s);
+    return dataUrl
+      ? [{ mimeType: dataUrl[1]!, data: dataUrl[2]! }]
+      : [{ url }];
+  });
+}
+
+function messagesToSdkMessage(messages: OpenAIChatMessage[]): string | SDKUserMessage {
+  const text = messages.map((message) => {
+    const content = contentToText(message.content);
+    if (message.role === "tool") return `[Tool result ${message.tool_call_id ?? ""}]\\n${content}`;
     if (message.role === "assistant" && message.tool_calls?.length) {
       const calls = message.tool_calls.map((call) => `${call.function.name}(${call.function.arguments})`).join(", ");
-      return `[Assistant]\n${text}\n[Tool calls: ${calls}]`;
+      return `[Assistant]\\n${content}\\n[Tool calls: ${calls}]`;
     }
-    return `[${message.role[0].toUpperCase()}${message.role.slice(1)}]\n${text}`;
-  }).join("\n\n");
+    return `[${message.role[0].toUpperCase()}${message.role.slice(1)}]\\n${content}`;
+  }).join("\\n\\n");
+  const images = messages.flatMap((message) => contentToImages(message.content) ?? []);
+  return images.length > 0 ? { text, images } : text;
 }
 
 function modelSelection(request: OpenAIChatRequest): { id: string; params?: Array<{ id: string; value: string }> } {
@@ -257,7 +269,7 @@ export class CursorAgentTransport {
         onDelta: ({ update }) => updateFromDelta(active, update),
         local: { customTools: active.customTools },
       };
-      active.run = await active.agent.send(messagesToPrompt(request.messages), sendOptions);
+      active.run = await active.agent.send(messagesToSdkMessage(request.messages), sendOptions);
       runResult = await Promise.race([
         active.run.wait(),
         waitForPending(active).then(() => undefined),
