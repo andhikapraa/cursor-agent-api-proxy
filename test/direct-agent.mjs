@@ -5,6 +5,10 @@ let runCount = 0;
 const createAgent = async () => ({
   async send(_prompt, options) {
     runCount += 1;
+    if (runCount === 1) {
+      assert.equal(typeof _prompt, "object");
+      assert.equal(_prompt.images?.[0]?.mimeType, "image/png");
+    }
     const resultPromise = (async () => {
       const tools = options.local?.customTools ?? {};
       if (runCount === 1) {
@@ -32,7 +36,10 @@ const tool = {
 };
 const first = await transport.execute("test-session", {
   model: "claude-opus-5-5",
-  messages: [{ role: "user", content: "Use lookup." }],
+  messages: [{ role: "user", content: [
+    { type: "text", text: "Use lookup." },
+    { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+  ] }],
   tools: [tool],
 });
 assert.equal(first.status, "tool_calls");
