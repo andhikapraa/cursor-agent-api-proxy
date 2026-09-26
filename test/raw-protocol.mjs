@@ -83,7 +83,7 @@ const defs = openAIToolsToMcpDefs([{
   function: { name: "lookup", description: "Look up", parameters: { type: "object" } },
 }]);
 assert.equal(defs[0].name, "lookup");
-assert.equal(defs[0].providerIdentifier, "omniroute");
+assert.equal(defs[0].providerIdentifier, "custom-user-tools");
 const requestFrame = [...iterateConnectFrames(buildAgentRequestBody({
   modelId: "claude-opus-5-5",
   conversationId: "conversation",
