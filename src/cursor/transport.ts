@@ -93,10 +93,9 @@ function messagesToSdkMessage(messages: OpenAIChatMessage[]): string | SDKUserMe
     }
     return `[${message.role[0].toUpperCase()}${message.role.slice(1)}]\\n${content}`;
   }).join("\\n\\n");
-  const images = messages.flatMap((message) => contentToImages(message.content) ?? []);
+  const images = messages.flatMap((message) => contentToImages(message.content));
   return images.length > 0 ? { text, images } : text;
 }
-
 function modelSelection(request: OpenAIChatRequest): { id: string; params?: Array<{ id: string; value: string }> } {
   const effort = request.reasoning?.effort ?? request.reasoning_effort;
   if (!effort) return { id: "claude-opus-5-5" };
@@ -108,7 +107,7 @@ function customToolsFor(session: SessionState, tools: OpenAITool[] | undefined):
   for (const tool of tools ?? []) {
     const definition = tool.function ?? tool;
     const name = definition.name;
-    if (tool.type !== "function" || !name || BUILTIN_TOOL_NAMES.has(name)) continue;
+    if (tool.type !== "function" || !name) continue;
     result[name] = {
       description: definition.description,
       inputSchema: definition.parameters,
@@ -257,7 +256,7 @@ export class CursorAgentTransport {
           apiKey,
           model,
           mode: "agent",
-          local: { cwd: process.cwd(), customTools: {} },
+          local: { cwd: process.cwd(), sandboxOptions: { enabled: false }, customTools: {} },
         }),
         customTools: {},
         pending: new Map(),
