@@ -355,7 +355,7 @@ export function* iterateConnectFrames(stream: Buffer): Generator<ConnectFrame> {
     if (pos + 5 + length > stream.length) return;
     const raw = stream.subarray(pos + 5, pos + 5 + length);
     const payload = flags & FLAG_GZIP ? zlib.gunzipSync(raw) : raw;
-    yield { flags, payload };
+    if ((flags & 0x02) === 0) yield { flags, payload };
     pos += 5 + length;
   }
 }
