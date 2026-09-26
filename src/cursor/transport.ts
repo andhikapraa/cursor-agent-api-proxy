@@ -175,16 +175,37 @@ function updateFromDelta(session: SessionState, update: { type?: string; text?: 
 }
 
 function resolveToolResults(session: SessionState, messages: OpenAIChatMessage[]): number {
+  const resolveOne = (pending: PendingToolCall, message: OpenAIChatMessage): void => {
+    pending.deferred.resolve({
+      content: [{ type: "text", text: contentToText(message.content) }],
+      isError: false,
+    });
+    session.pending.delete(pending.call.id);
+  };
   let resolved = 0;
   for (const message of messages) {
     if (message.role !== "tool" || !message.tool_call_id) continue;
     const pending = session.pending.get(message.tool_call_id);
     if (!pending) continue;
-    pending.deferred.resolve({
-      content: [{ type: "text", text: contentToText(message.content) }],
-      isError: false,
-    });
-    session.pending.delete(message.tool_call_id);
+    resolveOne(pending, message);
+    resolved += 1;
+  }
+
+  // Axon may rewrite Cursor's toolu_* IDs to OpenAI call_* IDs. Pair the
+  // latest assistant tool-call batch with the following tool results by name.
+  const assistantIndex = messages.map((message) => message.role).lastIndexOf("assistant");
+  const assistant = assistantIndex >= 0 ? messages[assistantIndex] : undefined;
+  const calls = assistant?.tool_calls ?? [];
+  const results = assistantIndex >= 0
+    ? messages.slice(assistantIndex + 1).filter((message) => message.role === "tool")
+    : [];
+  for (let index = 0; index < Math.min(calls.length, results.length); index += 1) {
+    const call = calls[index];
+    const message = results[index];
+    if (!call || !message) continue;
+    const pending = [...session.pending.values()].find((entry) => entry.call.function.name === call.function.name);
+    if (!pending) continue;
+    resolveOne(pending, message);
     resolved += 1;
   }
   return resolved;
