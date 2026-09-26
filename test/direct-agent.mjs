@@ -49,8 +49,8 @@ const second = await transport.execute("test-session", {
   model: "claude-opus-5-5",
   messages: [
     { role: "user", content: "Use lookup." },
-    { role: "assistant", content: null, tool_calls: first.toolCalls },
-    { role: "tool", tool_call_id: "call_demo", content: "demo result" },
+    { role: "assistant", content: null, tool_calls: [{ ...first.toolCalls[0], id: "call_axon_alias" }] },
+    { role: "tool", tool_call_id: "call_axon_alias", content: "demo result" },
   ],
   tools: [tool],
 });
